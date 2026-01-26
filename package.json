@@ -1,0 +1,39 @@
+{
+  "name": "housing-system-api",
+  "version": "1.0.0",
+  "description": "University Housing System - Secure Node.js API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "setup": "node scripts/setupDB.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "housing",
+    "university",
+    "api",
+    "express",
+    "postgresql",
+    "jwt",
+    "authentication"
+  ],
+  "author": "Khalid",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.1",
+    "pg": "^8.17.2"
+  }
+}
+
