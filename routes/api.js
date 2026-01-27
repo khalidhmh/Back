@@ -36,12 +36,49 @@
 
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
 
 // Import controllers
 const studentController = require('../controllers/studentController');
 
 // Import middleware
 const { authenticateToken } = require('../middleware/auth');
+
+// ========================================
+// CONFIGURE MULTER FOR IMAGE UPLOADS
+// ========================================
+/**
+ * WHY MULTER?
+ * - Middleware for handling file uploads
+ * - Stores files in uploads/ directory
+ * - Generates unique filenames with timestamps
+ */
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../uploads'));
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename: timestamp + extension
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    // Accept only image files
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
 
 // ========================================
 // STUDENT PROFILE ROUTES
@@ -78,6 +115,32 @@ const { authenticateToken } = require('../middleware/auth');
  * Error (500): Server error
  */
 router.get('/student/profile', authenticateToken, studentController.getProfile);
+
+// ========================================
+// PHOTO UPLOAD ROUTE
+// ========================================
+
+/**
+ * POST /api/student/upload-photo
+ * 
+ * Description: Upload student profile photo
+ * 
+ * Authentication: Required (JWT token)
+ * 
+ * Request: multipart/form-data with 'photo' file
+ * 
+ * Response (200):
+ * {
+ *   success: true,
+ *   data: {
+ *     photo_url: "http://localhost:3000/uploads/photo-1642345678901.jpg"
+ *   }
+ * }
+ * 
+ * Error (400): No file uploaded or invalid file type
+ * Error (500): Server error
+ */
+router.post('/student/upload-photo', authenticateToken, upload.single('photo'), studentController.uploadPhoto);
 
 // ========================================
 // PUBLIC CONTENT ROUTES (No Authentication)

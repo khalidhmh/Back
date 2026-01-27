@@ -39,6 +39,45 @@ const sendResponse = (res, success, data = null, message = null, statusCode = 20
 
 /**
  * ========================================
+ * UPLOAD PHOTO - POST
+ * ========================================
+ * 
+ * Uploads student profile photo to server
+ * Updates photo_url in database
+ * Returns absolute URL for mobile app
+ * 
+ * Route: POST /api/student/upload-photo
+ * Auth: Required
+ * Body: multipart/form-data with 'photo' file
+ */
+exports.uploadPhoto = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+
+    // Check if file was uploaded
+    if (!req.file) {
+      return sendResponse(res, false, null, 'No file uploaded', 400);
+    }
+
+    // Construct photo URL for mobile app
+    const photoUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+    // Update photo_url in database
+    await pool.query(
+      'UPDATE students SET photo_url = ? WHERE id = ?',
+      [photoUrl, studentId]
+    );
+
+    return sendResponse(res, true, { photo_url: photoUrl }, null, 200);
+
+  } catch (err) {
+    console.error('Error uploading photo:', err);
+    return sendResponse(res, false, null, 'Failed to upload photo', 500);
+  }
+};
+
+/**
+ * ========================================
  * STUDENT PROFILE - GET
  * ========================================
  * 
@@ -123,14 +162,20 @@ exports.getActivities = async (req, res) => {
          description,
          category,
          location,
-         date,
+         event_date,
          image_url,
          created_at
        FROM activities
-       ORDER BY date DESC`
+       ORDER BY event_date DESC`
     );
 
-    return sendResponse(res, true, rows);
+    // Map event_date to date for mobile app compatibility
+    const activities = rows.map(activity => ({
+      ...activity,
+      date: activity.event_date
+    }));
+
+    return sendResponse(res, true, activities);
 
   } catch (err) {
     console.error('Error fetching activities:', err);
