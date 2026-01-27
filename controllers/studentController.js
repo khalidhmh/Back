@@ -1,74 +1,47 @@
 /**
  * ========================================
- * STUDENT CONTROLLER
+ * STUDENT CONTROLLER (PostgreSQL Version)
  * ========================================
- * 
- * Purpose: Handle all student-related requests
- * Implements DataRepository response format for mobile app
- * 
- * Response Format:
- * Success: { success: true, data: {...} }
- * Error:   { success: false, message: "..." }
- * 
- * All methods check student_id from JWT token (req.user.id)
  */
 
-const pool = require('../db');
+const db = require('../db'); // تأكد أن هذا الملف يصدر pool من مكتبة pg
 
-/**
- * ========================================
- * HELPER FUNCTION - SEND RESPONSE
- * ========================================
- * 
- * Ensures consistent JSON response format
- * Used by all controller methods
- */
+// Helper: Standardized Response
 const sendResponse = (res, success, data = null, message = null, statusCode = 200) => {
-  if (success) {
-    return res.status(statusCode).json({
-      success: true,
-      data: data
-    });
-  } else {
-    return res.status(statusCode).json({
-      success: false,
-      message: message || 'An error occurred'
-    });
-  }
+  const response = { success };
+  if (data) response.data = data;
+  if (message) response.message = message;
+  return res.status(statusCode).json(response);
+};
+
+// Helper: Fix Image URLs (Local -> Absolute)
+const fixImageUrl = (req, path) => {
+    if (!path) return null;
+    if (path.startsWith('http')) return path;
+    return `${req.protocol}://${req.get('host')}${path}`;
 };
 
 /**
- * ========================================
- * UPLOAD PHOTO - POST
- * ========================================
- * 
- * Uploads student profile photo to server
- * Updates photo_url in database
- * Returns absolute URL for mobile app
- * 
- * Route: POST /api/student/upload-photo
- * Auth: Required
- * Body: multipart/form-data with 'photo' file
+ * 1. UPLOAD PHOTO
  */
 exports.uploadPhoto = async (req, res) => {
   try {
     const studentId = req.user.id;
 
-    // Check if file was uploaded
     if (!req.file) {
       return sendResponse(res, false, null, 'No file uploaded', 400);
     }
 
-    // Construct photo URL for mobile app
-    const photoUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    // Save relative path in DB, send absolute URL to App
+    const relativePath = `/uploads/${req.file.filename}`;
+    const fullUrl = `${req.protocol}://${req.get('host')}${relativePath}`;
 
-    // Update photo_url in database
-    await pool.query(
-      'UPDATE students SET photo_url = ? WHERE id = ?',
-      [photoUrl, studentId]
+    await db.query(
+      'UPDATE students SET photo_url = $1 WHERE id = $2',
+      [relativePath, studentId]
     );
 
-    return sendResponse(res, true, { photo_url: photoUrl }, null, 200);
+    return sendResponse(res, true, { photo_url: fullUrl });
 
   } catch (err) {
     console.error('Error uploading photo:', err);
@@ -77,656 +50,293 @@ exports.uploadPhoto = async (req, res) => {
 };
 
 /**
- * ========================================
- * STUDENT PROFILE - GET
- * ========================================
- * 
- * Fetches student information
- * Returns room as nested object {room_no, building}
- * 
- * Route: GET /api/student/profile
- * Auth: Required (Bearer token)
+ * 2. PROFILE (With Room Join)
  */
 exports.getProfile = async (req, res) => {
-  try {
-    const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         national_id,
-         full_name,
-         student_id,
-         college,
-         academic_year,
-         room_no,
-         building_name,
-         photo_url,
-         housing_type,
-         created_at,
-         updated_at
-       FROM students 
-       WHERE id = ?`,
-      [studentId]
-    );
-
-    if (rows.length === 0) {
-      return sendResponse(res, false, null, 'Student not found', 404);
+    try {
+        const studentId = req.user.id;
+        
+        // JOIN to get room details
+        const query = `
+            SELECT s.*, r.room_number, r.building 
+            FROM students s 
+            LEFT JOIN rooms r ON s.room_id = r.id 
+            WHERE s.id = $1
+        `;
+        
+        const { rows } = await db.query(query, [studentId]);
+        
+        if (rows.length === 0) return sendResponse(res, false, null, 'Student not found');
+        
+        const student = rows[0];
+        
+        const profileData = {
+            id: student.id,
+            national_id: student.national_id,
+            full_name: student.full_name,
+            student_id: student.student_id || student.national_id, 
+            college: student.faculty,
+            academic_year: student.academic_year || 'غير محدد',
+            photo_url: fixImageUrl(req, student.photo_url),
+            // Return Room as Object
+            room: { 
+                room_no: student.room_number || 'غير مسكن',
+                building: student.building || '---'
+            }
+        };
+        
+        sendResponse(res, true, profileData);
+    } catch (error) {
+        console.error('Profile Error:', error);
+        sendResponse(res, false, null, error.message);
     }
-
-    const student = rows[0];
-
-    // Format response with room as object
-    const profileData = {
-      id: student.id,
-      national_id: student.national_id,
-      full_name: student.full_name,
-      student_id: student.student_id,
-      college: student.college,
-      academic_year: student.academic_year,
-      room: {
-        room_no: student.room_no,
-        building: student.building_name
-      },
-      photo_url: student.photo_url,
-      housing_type: student.housing_type,
-      created_at: student.created_at,
-      updated_at: student.updated_at
-    };
-
-    return sendResponse(res, true, profileData);
-
-  } catch (err) {
-    console.error('Error fetching profile:', err);
-    return sendResponse(res, false, null, 'Failed to fetch profile', 500);
-  }
 };
 
 /**
- * ========================================
- * ACTIVITIES - GET
- * ========================================
- * 
- * Fetches all activities
- * Public endpoint (no student_id filter)
- * 
- * Route: GET /api/student/activities
- * Auth: Optional
+ * 3. ACTIVITIES (Fix Date & Images)
  */
 exports.getActivities = async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         title,
-         description,
-         category,
-         location,
-         event_date,
-         image_url,
-         created_at
-       FROM activities
-       ORDER BY event_date DESC`
+    const { rows } = await db.query(
+      `SELECT * FROM activities ORDER BY event_date DESC`
     );
 
-    // Map event_date to date for mobile app compatibility
     const activities = rows.map(activity => ({
       ...activity,
-      date: activity.event_date
+      image_url: fixImageUrl(req, activity.image_url),
+      date: activity.event_date // Map for Mobile App
     }));
 
     return sendResponse(res, true, activities);
-
   } catch (err) {
-    console.error('Error fetching activities:', err);
-    return sendResponse(res, false, null, 'Failed to fetch activities', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * ANNOUNCEMENTS - GET
- * ========================================
- * 
- * Fetches all announcements
- * Public endpoint (no student_id filter)
- * 
- * Route: GET /api/student/announcements
- * Auth: Optional
+ * 4. ANNOUNCEMENTS
  */
 exports.getAnnouncements = async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         title,
-         body,
-         category,
-         priority,
-         created_at,
-         updated_at
-       FROM announcements
-       ORDER BY created_at DESC`
+    const { rows } = await db.query(
+      `SELECT * FROM announcements ORDER BY created_at DESC`
     );
-
     return sendResponse(res, true, rows);
-
   } catch (err) {
-    console.error('Error fetching announcements:', err);
-    return sendResponse(res, false, null, 'Failed to fetch announcements', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * ATTENDANCE - GET
- * ========================================
- * 
- * Fetches attendance logs for logged-in student
- * Returns records for current student only
- * 
- * Route: GET /api/student/attendance
- * Auth: Required
+ * 5. ATTENDANCE
  */
 exports.getAttendance = async (req, res) => {
   try {
     const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         date,
-         status,
-         created_at
-       FROM attendance_logs
-       WHERE student_id = ?
-       ORDER BY date DESC`,
+    const { rows } = await db.query(
+      `SELECT * FROM attendance_logs WHERE student_id = $1 ORDER BY date DESC`,
       [studentId]
     );
-
-    return sendResponse(res, true, rows);
-
+    
+    // Normalize status to lowercase
+    const formatted = rows.map(r => ({ ...r, status: r.status ? r.status.toLowerCase() : 'present' }));
+    
+    return sendResponse(res, true, formatted);
   } catch (err) {
-    console.error('Error fetching attendance:', err);
-    return sendResponse(res, false, null, 'Failed to fetch attendance', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * COMPLAINTS - GET
- * ========================================
- * 
- * Fetches all complaints for logged-in student
- * 
- * Route: GET /api/student/complaints
- * Auth: Required
+ * 6. COMPLAINTS (Get & Post)
  */
 exports.getComplaints = async (req, res) => {
   try {
     const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         title,
-         description,
-         recipient,
-         is_secret,
-         status,
-         admin_reply,
-         type,
-         created_at,
-         updated_at
-       FROM complaints
-       WHERE student_id = ?
-       ORDER BY created_at DESC`,
+    const { rows } = await db.query(
+      `SELECT * FROM complaints WHERE student_id = $1 ORDER BY created_at DESC`,
       [studentId]
     );
 
-    return sendResponse(res, true, rows);
-
+    const formatted = rows.map(r => ({ ...r, status: r.status ? r.status.toLowerCase() : 'pending' }));
+    return sendResponse(res, true, formatted);
   } catch (err) {
-    console.error('Error fetching complaints:', err);
-    return sendResponse(res, false, null, 'Failed to fetch complaints', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
-/**
- * ========================================
- * SUBMIT COMPLAINT - POST
- * ========================================
- * 
- * Creates a new complaint for logged-in student
- * 
- * Request Body:
- * {
- *   title: string,
- *   description: string,
- *   recipient: string,
- *   is_secret: boolean,
- *   type: string (General|Urgent)
- * }
- * 
- * Route: POST /api/student/complaints
- * Auth: Required
- */
 exports.submitComplaint = async (req, res) => {
   try {
     const studentId = req.user.id;
     const { title, description, recipient, is_secret, type } = req.body;
 
-    // Validation
-    if (!title || !description) {
-      return sendResponse(res, false, null, 'Title and description are required', 400);
-    }
-
-    const [result] = await pool.query(
+    const { rows } = await db.query(
       `INSERT INTO complaints (student_id, title, description, recipient, is_secret, type, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'Pending')`,
+       VALUES ($1, $2, $3, $4, $5, $6, 'Pending') RETURNING id`,
       [studentId, title, description, recipient || 'Management', is_secret || false, type || 'General']
     );
 
-    const complaintData = {
-      id: result.insertId,
-      student_id: studentId,
-      title,
-      description,
-      recipient: recipient || 'Management',
-      is_secret: is_secret || false,
-      status: 'Pending',
-      type: type || 'General',
-      created_at: new Date()
-    };
-
-    return sendResponse(res, true, complaintData, null, 201);
-
+    return sendResponse(res, true, { id: rows[0].id }, 'تم إرسال الشكوى بنجاح');
   } catch (err) {
-    console.error('Error submitting complaint:', err);
-    return sendResponse(res, false, null, 'Failed to submit complaint', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * MAINTENANCE REQUESTS - GET
- * ========================================
- * 
- * Fetches all maintenance requests for logged-in student
- * 
- * Route: GET /api/student/maintenance
- * Auth: Required
+ * 7. MAINTENANCE (Get & Post)
  */
 exports.getMaintenanceRequests = async (req, res) => {
   try {
     const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         category,
-         description,
-         status,
-         supervisor_reply,
-         created_at,
-         updated_at
-       FROM maintenance_requests
-       WHERE student_id = ?
-       ORDER BY created_at DESC`,
+    const { rows } = await db.query(
+      `SELECT * FROM maintenance_requests WHERE student_id = $1 ORDER BY created_at DESC`,
       [studentId]
     );
 
-    return sendResponse(res, true, rows);
-
+    const formatted = rows.map(r => ({ ...r, status: r.status ? r.status.toLowerCase() : 'pending' }));
+    return sendResponse(res, true, formatted);
   } catch (err) {
-    console.error('Error fetching maintenance requests:', err);
-    return sendResponse(res, false, null, 'Failed to fetch maintenance requests', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
-/**
- * ========================================
- * SUBMIT MAINTENANCE REQUEST - POST
- * ========================================
- * 
- * Creates a new maintenance request for logged-in student
- * 
- * Request Body:
- * {
- *   category: string (Electric|Plumbing|Net|Furniture|Other),
- *   description: string
- * }
- * 
- * Route: POST /api/student/maintenance
- * Auth: Required
- */
 exports.submitMaintenance = async (req, res) => {
   try {
     const studentId = req.user.id;
     const { category, description } = req.body;
 
-    // Validation
-    if (!category || !description) {
-      return sendResponse(res, false, null, 'Category and description are required', 400);
-    }
-
-    const [result] = await pool.query(
+    const { rows } = await db.query(
       `INSERT INTO maintenance_requests (student_id, category, description, status)
-       VALUES (?, ?, ?, 'Pending')`,
+       VALUES ($1, $2, $3, 'Pending') RETURNING id`,
       [studentId, category, description]
     );
 
-    const maintenanceData = {
-      id: result.insertId,
-      student_id: studentId,
-      category,
-      description,
-      status: 'Pending',
-      supervisor_reply: null,
-      created_at: new Date()
-    };
-
-    return sendResponse(res, true, maintenanceData, null, 201);
-
+    return sendResponse(res, true, { id: rows[0].id }, 'تم إرسال الطلب بنجاح');
   } catch (err) {
-    console.error('Error submitting maintenance request:', err);
-    return sendResponse(res, false, null, 'Failed to submit maintenance request', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * PERMISSIONS - GET
- * ========================================
- * 
- * Fetches all permission requests for logged-in student
- * 
- * Route: GET /api/student/permissions
- * Auth: Required
+ * 8. PERMISSIONS (Get & Post)
  */
 exports.getPermissions = async (req, res) => {
   try {
     const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         type,
-         start_date,
-         end_date,
-         reason,
-         status,
-         created_at,
-         updated_at
-       FROM permissions
-       WHERE student_id = ?
-       ORDER BY created_at DESC`,
+    const { rows } = await db.query(
+      `SELECT * FROM permissions WHERE student_id = $1 ORDER BY created_at DESC`,
       [studentId]
     );
 
-    return sendResponse(res, true, rows);
-
+    const formatted = rows.map(r => ({ ...r, status: r.status ? r.status.toLowerCase() : 'pending' }));
+    return sendResponse(res, true, formatted);
   } catch (err) {
-    console.error('Error fetching permissions:', err);
-    return sendResponse(res, false, null, 'Failed to fetch permissions', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
-/**
- * ========================================
- * REQUEST PERMISSION - POST
- * ========================================
- * 
- * Creates a new permission request for logged-in student
- * 
- * Request Body:
- * {
- *   type: string (Late|Travel),
- *   start_date: date (YYYY-MM-DD),
- *   end_date: date (YYYY-MM-DD),
- *   reason: string
- * }
- * 
- * Route: POST /api/student/permissions
- * Auth: Required
- */
 exports.requestPermission = async (req, res) => {
   try {
     const studentId = req.user.id;
     const { type, start_date, end_date, reason } = req.body;
 
-    // Validation
-    if (!type || !start_date || !end_date || !reason) {
-      return sendResponse(
-        res,
-        false,
-        null,
-        'Type, start_date, end_date, and reason are required',
-        400
-      );
-    }
-
-    // Validate date format
-    if (!isValidDate(start_date) || !isValidDate(end_date)) {
-      return sendResponse(res, false, null, 'Invalid date format. Use YYYY-MM-DD', 400);
-    }
-
-    const [result] = await pool.query(
+    const { rows } = await db.query(
       `INSERT INTO permissions (student_id, type, start_date, end_date, reason, status)
-       VALUES (?, ?, ?, ?, ?, 'Pending')`,
+       VALUES ($1, $2, $3, $4, $5, 'Pending') RETURNING id`,
       [studentId, type, start_date, end_date, reason]
     );
 
-    const permissionData = {
-      id: result.insertId,
-      student_id: studentId,
-      type,
-      start_date,
-      end_date,
-      reason,
-      status: 'Pending',
-      created_at: new Date()
-    };
-
-    return sendResponse(res, true, permissionData, null, 201);
-
+    return sendResponse(res, true, { id: rows[0].id }, 'تم طلب التصريح بنجاح');
   } catch (err) {
-    console.error('Error requesting permission:', err);
-    return sendResponse(res, false, null, 'Failed to request permission', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * NOTIFICATIONS - GET
- * ========================================
- * 
- * Fetches all notifications for logged-in student
- * 
- * Route: GET /api/student/notifications
- * Auth: Required
+ * 9. NOTIFICATIONS
  */
 exports.getNotifications = async (req, res) => {
   try {
     const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         title,
-         body,
-         is_unread,
-         type,
-         sender_name,
-         created_at
-       FROM notifications
-       WHERE student_id = ?
-       ORDER BY created_at DESC`,
+    const { rows } = await db.query(
+      `SELECT * FROM notifications WHERE student_id = $1 ORDER BY created_at DESC`,
       [studentId]
     );
-
     return sendResponse(res, true, rows);
-
   } catch (err) {
-    console.error('Error fetching notifications:', err);
-    return sendResponse(res, false, null, 'Failed to fetch notifications', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
 };
 
 /**
- * ========================================
- * MARK NOTIFICATION AS READ - POST
- * ========================================
- * 
- * Marks a notification as read
- * 
- * Route: POST /api/student/notifications/:id/read
- * Auth: Required
+ * 10. CLEARANCE
+ */
+exports.getClearanceStatus = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const { rows } = await db.query(
+      `SELECT * FROM clearance_requests WHERE student_id = $1 LIMIT 1`,
+      [studentId]
+    );
+
+    if (rows.length === 0) {
+      return sendResponse(res, true, null); // No clearance
+    }
+    return sendResponse(res, true, rows[0]);
+  } catch (err) {
+    return sendResponse(res, false, null, err.message, 500);
+  }
+};
+
+exports.initiateClearance = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    
+    // Check exist
+    const { rows: existing } = await db.query(
+        'SELECT id FROM clearance_requests WHERE student_id = $1', [studentId]
+    );
+    
+    if (existing.length > 0) return sendResponse(res, false, null, 'Clearance already started', 400);
+
+    const { rows } = await db.query(
+      `INSERT INTO clearance_requests (student_id, status, current_step)
+       VALUES ($1, 'Pending', 1) RETURNING id`,
+      [studentId]
+    );
+
+    return sendResponse(res, true, { id: rows[0].id });
+  } catch (err) {
+    return sendResponse(res, false, null, err.message, 500);
+  }
+  
+};
+/**
+ * 9.5 MARK NOTIFICATION AS READ
  */
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const studentId = req.user.id;
     const notificationId = req.params.id;
 
-    // Verify notification belongs to student
-    const [notification] = await pool.query(
-      'SELECT id FROM notifications WHERE id = ? AND student_id = ?',
+    // 1. التأكد إن الإشعار يخص الطالب ده
+    const { rows } = await db.query(
+      'SELECT id FROM notifications WHERE id = $1 AND student_id = $2',
       [notificationId, studentId]
     );
 
-    if (notification.length === 0) {
+    if (rows.length === 0) {
       return sendResponse(res, false, null, 'Notification not found', 404);
     }
 
-    await pool.query(
-      'UPDATE notifications SET is_unread = FALSE WHERE id = ?',
+    // 2. تحديث الحالة لمقروء
+    await db.query(
+      'UPDATE notifications SET is_unread = FALSE WHERE id = $1',
       [notificationId]
     );
 
-    return sendResponse(res, true, { message: 'Notification marked as read' });
-
+    return sendResponse(res, true, null, 'تم تحديد الإشعار كمقروء');
   } catch (err) {
-    console.error('Error marking notification as read:', err);
-    return sendResponse(res, false, null, 'Failed to mark notification as read', 500);
+    return sendResponse(res, false, null, err.message, 500);
   }
-};
-
-/**
- * ========================================
- * CLEARANCE STATUS - GET
- * ========================================
- * 
- * Fetches clearance request status for logged-in student
- * 
- * Route: GET /api/student/clearance
- * Auth: Required
- */
-exports.getClearanceStatus = async (req, res) => {
-  try {
-    const studentId = req.user.id;
-
-    const [rows] = await pool.query(
-      `SELECT 
-         id,
-         student_id,
-         status,
-         current_step,
-         initiated_at,
-         updated_at
-       FROM clearance_requests
-       WHERE student_id = ?
-       LIMIT 1`,
-      [studentId]
-    );
-
-    if (rows.length === 0) {
-      // No clearance request yet
-      return sendResponse(res, true, {
-        student_id: studentId,
-        status: 'Not Initiated',
-        current_step: null,
-        message: 'No clearance request initiated yet'
-      });
-    }
-
-    return sendResponse(res, true, rows[0]);
-
-  } catch (err) {
-    console.error('Error fetching clearance status:', err);
-    return sendResponse(res, false, null, 'Failed to fetch clearance status', 500);
-  }
-};
-
-/**
- * ========================================
- * INITIATE CLEARANCE - POST
- * ========================================
- * 
- * Creates a new clearance request for logged-in student
- * 
- * Route: POST /api/student/clearance/initiate
- * Auth: Required
- */
-exports.initiateClearance = async (req, res) => {
-  try {
-    const studentId = req.user.id;
-
-    // Check if clearance already exists
-    const [existing] = await pool.query(
-      'SELECT id FROM clearance_requests WHERE student_id = ?',
-      [studentId]
-    );
-
-    if (existing.length > 0) {
-      return sendResponse(
-        res,
-        false,
-        null,
-        'Clearance request already exists for this student',
-        400
-      );
-    }
-
-    const [result] = await pool.query(
-      `INSERT INTO clearance_requests (student_id, status, current_step)
-       VALUES (?, 'Pending', 'Room Inspection')`,
-      [studentId]
-    );
-
-    const clearanceData = {
-      id: result.insertId,
-      student_id: studentId,
-      status: 'Pending',
-      current_step: 'Room Inspection',
-      initiated_at: new Date()
-    };
-
-    return sendResponse(res, true, clearanceData, null, 201);
-
-  } catch (err) {
-    console.error('Error initiating clearance:', err);
-    return sendResponse(res, false, null, 'Failed to initiate clearance', 500);
-  }
-};
-
-/**
- * ========================================
- * UTILITY FUNCTIONS
- * ========================================
- */
-
-/**
- * Validates date format (YYYY-MM-DD)
- */
-const isValidDate = (dateString) => {
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateRegex.test(dateString)) return false;
-
-  const date = new Date(dateString);
-  return date instanceof Date && !isNaN(date);
 };
