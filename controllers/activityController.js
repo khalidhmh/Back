@@ -68,13 +68,13 @@ exports.getActivities = async (req, res) => {
     // - Shows how many students are registered for activity
     // - Mobile app shows "15 students interested"
     // - Helps student decide to join based on popularity
-    
+
     let query = `
       SELECT 
         a.id,
         a.title,
         a.description,
-        a.date,
+        a.event_date,
         a.location,
         a.max_participants,
         COALESCE(COUNT(DISTINCT asub.id) FILTER (WHERE asub.activity_id IS NOT NULL), 0) as participant_count,
@@ -86,9 +86,9 @@ exports.getActivities = async (req, res) => {
       FROM activities a
       LEFT JOIN activity_subscriptions asub ON a.id = asub.activity_id
       LEFT JOIN activity_subscriptions sub ON a.id = sub.activity_id AND sub.student_id = $1
-      WHERE a.date > NOW()
-      GROUP BY a.id, a.title, a.description, a.date, a.location, a.max_participants, sub.id
-      ORDER BY a.date ASC
+      WHERE a.event_date > NOW()
+      GROUP BY a.id, a.title, a.description, a.event_date, a.location, a.max_participants, sub.id
+      ORDER BY a.event_date ASC
     `;
 
     const params = [studentId];
@@ -170,7 +170,7 @@ exports.subscribeToActivity = async (req, res) => {
     // - Need to check if activity is full
     // - max_participants limits registration
     // - Student can't subscribe if activity is full
-    
+
     const activityCheck = `
       SELECT 
         a.id,

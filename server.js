@@ -38,6 +38,7 @@ const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
+require('./cronJobs')(); // Initializes the 11:00 PM attendance check
 
 // ========================================
 // CREATE EXPRESS APPLICATION
@@ -264,8 +265,8 @@ app.use((err, req, res, next) => {
 // ========================================
 
 // Initialize Cron Jobs
-const initCronJobs = require('./cronJobs');
-initCronJobs();
+// (Moved to top)
+
 
 /**
  * WHY SEPARATE PORT VARIABLE?

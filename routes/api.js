@@ -40,7 +40,9 @@ const multer = require('multer');
 const path = require('path');
 
 // Import controllers
+// Import controllers
 const studentController = require('../controllers/studentController');
+const activityController = require('../controllers/activityController');
 
 // Import middleware
 const { authenticateToken } = require('../middleware/auth');
@@ -168,7 +170,7 @@ router.post('/student/upload-photo', authenticateToken, upload.single('photo'), 
  * 
  * Error (500): Server error
  */
-router.get('/student/activities', studentController.getActivities);
+router.get('/student/activities', activityController.getActivities);
 
 /**
  * GET /api/student/announcements
