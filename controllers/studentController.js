@@ -16,9 +16,9 @@ const sendResponse = (res, success, data = null, message = null, statusCode = 20
 
 // Helper: Fix Image URLs (Local -> Absolute)
 const fixImageUrl = (req, path) => {
-    if (!path) return null;
-    if (path.startsWith('http')) return path;
-    return `${req.protocol}://${req.get('host')}${path}`;
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${req.protocol}://${req.get('host')}${path}`;
 };
 
 /**
@@ -53,43 +53,43 @@ exports.uploadPhoto = async (req, res) => {
  * 2. PROFILE (With Room Join)
  */
 exports.getProfile = async (req, res) => {
-    try {
-        const studentId = req.user.id;
-        
-        // JOIN to get room details
-        const query = `
+  try {
+    const studentId = req.user.id;
+
+    // JOIN to get room details
+    const query = `
             SELECT s.*, r.room_number, r.building 
             FROM students s 
             LEFT JOIN rooms r ON s.room_id = r.id 
             WHERE s.id = $1
         `;
-        
-        const { rows } = await db.query(query, [studentId]);
-        
-        if (rows.length === 0) return sendResponse(res, false, null, 'Student not found');
-        
-        const student = rows[0];
-        
-        const profileData = {
-            id: student.id,
-            national_id: student.national_id,
-            full_name: student.full_name,
-            student_id: student.student_id || student.national_id, 
-            college: student.faculty,
-            academic_year: student.academic_year || 'غير محدد',
-            photo_url: fixImageUrl(req, student.photo_url),
-            // Return Room as Object
-            room: { 
-                room_no: student.room_number || 'غير مسكن',
-                building: student.building || '---'
-            }
-        };
-        
-        sendResponse(res, true, profileData);
-    } catch (error) {
-        console.error('Profile Error:', error);
-        sendResponse(res, false, null, error.message);
-    }
+
+    const { rows } = await db.query(query, [studentId]);
+
+    if (rows.length === 0) return sendResponse(res, false, null, 'Student not found');
+
+    const student = rows[0];
+
+    const profileData = {
+      id: student.id,
+      national_id: student.national_id,
+      full_name: student.full_name,
+      student_id: student.student_id || student.national_id,
+      college: student.faculty,
+      academic_year: student.academic_year || 'غير محدد',
+      photo_url: fixImageUrl(req, student.photo_url),
+      // Return Room as Object
+      room: {
+        room_no: student.room_number || 'غير مسكن',
+        building: student.building || '---'
+      }
+    };
+
+    sendResponse(res, true, profileData);
+  } catch (error) {
+    console.error('Profile Error:', error);
+    sendResponse(res, false, null, error.message);
+  }
 };
 
 /**
@@ -97,14 +97,21 @@ exports.getProfile = async (req, res) => {
  */
 exports.getActivities = async (req, res) => {
   try {
+    const studentId = req.user.id;
     const { rows } = await db.query(
-      `SELECT * FROM activities ORDER BY event_date DESC`
+      `SELECT a.*, 
+        CASE WHEN s.id IS NOT NULL THEN true ELSE false END as is_subscribed
+       FROM activities a
+       LEFT JOIN activity_subscriptions s ON a.id = s.activity_id AND s.student_id = $1
+       ORDER BY event_date DESC`,
+      [studentId]
     );
 
     const activities = rows.map(activity => ({
       ...activity,
       image_url: fixImageUrl(req, activity.image_url),
-      date: activity.event_date // Map for Mobile App
+      // Mobile app expects 'event_date' which is in a.*
+      // Removed mapping 'date: activity.event_date' as per requirements
     }));
 
     return sendResponse(res, true, activities);
@@ -137,10 +144,10 @@ exports.getAttendance = async (req, res) => {
       `SELECT * FROM attendance_logs WHERE student_id = $1 ORDER BY date DESC`,
       [studentId]
     );
-    
+
     // Normalize status to lowercase
     const formatted = rows.map(r => ({ ...r, status: r.status ? r.status.toLowerCase() : 'present' }));
-    
+
     return sendResponse(res, true, formatted);
   } catch (err) {
     return sendResponse(res, false, null, err.message, 500);
@@ -240,6 +247,25 @@ exports.requestPermission = async (req, res) => {
     const studentId = req.user.id;
     const { type, start_date, end_date, reason } = req.body;
 
+    // 1. Validate Date Range
+    if (new Date(end_date) <= new Date(start_date)) {
+      return sendResponse(res, false, null, 'End date must be after start date', 400);
+    }
+
+    // 2. Check for Overlapping Pending Requests
+    // Logic: (StartA <= EndB) and (EndA >= StartB)
+    const { rows: conflicts } = await db.query(
+      `SELECT id FROM permissions 
+       WHERE student_id = $1 
+       AND status = 'Pending'
+       AND (start_date <= $3 AND end_date >= $2)`,
+      [studentId, start_date, end_date]
+    );
+
+    if (conflicts.length > 0) {
+      return sendResponse(res, false, null, 'You already have a pending request overlapping with these dates', 409);
+    }
+
     const { rows } = await db.query(
       `INSERT INTO permissions (student_id, type, start_date, end_date, reason, status)
        VALUES ($1, $2, $3, $4, $5, 'Pending') RETURNING id`,
@@ -291,12 +317,12 @@ exports.getClearanceStatus = async (req, res) => {
 exports.initiateClearance = async (req, res) => {
   try {
     const studentId = req.user.id;
-    
+
     // Check exist
     const { rows: existing } = await db.query(
-        'SELECT id FROM clearance_requests WHERE student_id = $1', [studentId]
+      'SELECT id FROM clearance_requests WHERE student_id = $1', [studentId]
     );
-    
+
     if (existing.length > 0) return sendResponse(res, false, null, 'Clearance already started', 400);
 
     const { rows } = await db.query(
@@ -309,7 +335,7 @@ exports.initiateClearance = async (req, res) => {
   } catch (err) {
     return sendResponse(res, false, null, err.message, 500);
   }
-  
+
 };
 /**
  * 9.5 MARK NOTIFICATION AS READ

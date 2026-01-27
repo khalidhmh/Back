@@ -249,7 +249,7 @@ app.use((req, res) => {
  */
 app.use((err, req, res, next) => {
   console.error('❌ Unhandled error:', err);
-  
+
   res.status(err.status || 500).json({
     success: false,
     message: process.env.NODE_ENV === 'production'
@@ -262,6 +262,11 @@ app.use((err, req, res, next) => {
 // ========================================
 // START SERVER
 // ========================================
+
+// Initialize Cron Jobs
+const initCronJobs = require('./cronJobs');
+initCronJobs();
+
 /**
  * WHY SEPARATE PORT VARIABLE?
  * - Environment-specific configuration
