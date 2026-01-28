@@ -5,7 +5,9 @@ const path = require('path');
 
 // Import controllers
 const studentController = require('../controllers/studentController');
+console.log("Check Controller:", studentController);
 const activityController = require('../controllers/activityController'); // ✅ Imported
+console.log("Check Controller:", activityController);
 
 // Import middleware
 const { authenticateToken } = require('../middleware/auth');
