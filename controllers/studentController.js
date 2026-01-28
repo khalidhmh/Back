@@ -56,7 +56,7 @@ exports.getProfile = async (req, res) => {
   try {
     const studentId = req.user.id;
 
-    // JOIN to get room details
+    // JOIN to get room details from the 'rooms' table
     const query = `
             SELECT s.*, r.room_number, r.building 
             FROM students s 
@@ -70,19 +70,29 @@ exports.getProfile = async (req, res) => {
 
     const student = rows[0];
 
+    // Construct Housing Object (Null Safety)
+    let housing = null;
+    if (student.building && student.room_number) {
+      housing = {
+        building: student.building,
+        room: student.room_number
+      };
+    } else if (student.room_id) {
+      // Fallback if joined data is missing but room_id exists
+      housing = {
+        building: 'Unknown Building',
+        room: 'Unknown Room'
+      };
+    }
+
     const profileData = {
       id: student.id,
-      national_id: student.national_id,
       full_name: student.full_name,
-      student_id: student.student_id || student.national_id,
-      college: student.faculty,
-      academic_year: student.academic_year || 'غير محدد',
+      national_id: student.national_id,
       photo_url: fixImageUrl(req, student.photo_url),
-      // Return Room as Object
-      room: {
-        room_no: student.room_number || 'غير مسكن',
-        building: student.building || '---'
-      }
+      college: student.college || student.faculty, // Fallback for safety
+      level: student.level || student.academic_year || 0, // Fallback for mapping
+      housing: housing
     };
 
     sendResponse(res, true, profileData);
