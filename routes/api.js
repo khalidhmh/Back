@@ -56,6 +56,8 @@ router.get('/student/activities', authenticateToken, activityController.getActiv
 router.post('/student/activities/subscribe', authenticateToken, activityController.subscribeToActivity); // ✅ Added subscribe route
 
 router.get('/student/announcements', studentController.getAnnouncements);
+console.log("🛠️ Unsubscribe Route is Registering..."); // ✅ ضيف السطر ده هنا
+router.post('/student/activities/unsubscribe', authenticateToken, activityController.unsubscribeFromActivity);
 
 // ========================================
 // ATTENDANCE ROUTES
