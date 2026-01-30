@@ -5,9 +5,7 @@ const path = require('path');
 
 // Import controllers
 const studentController = require('../controllers/studentController');
-console.log("Check Controller:", studentController);
-const activityController = require('../controllers/activityController'); // ✅ Imported
-console.log("Check Controller:", activityController);
+const activityController = require('../controllers/activityController');
 
 // Import middleware
 const { authenticateToken } = require('../middleware/auth');
@@ -17,6 +15,7 @@ const { authenticateToken } = require('../middleware/auth');
 // ========================================
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
+    // التأكد من وجود مجلد uploads أو إنشائه
     cb(null, path.join(__dirname, '../uploads'));
   },
   filename: (req, file, cb) => {
@@ -28,7 +27,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024 }, // حد أقصى 5 ميجا
   fileFilter: (req, file, cb) => {
     const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (allowedMimes.includes(file.mimetype)) {
@@ -50,16 +49,17 @@ router.post('/student/upload-photo', authenticateToken, upload.single('photo'), 
 // ========================================
 
 /**
- * GET /api/student/activities
- * Using activityController for subscription logic & event_date fix
+ * ACTIVITIES
+ * نستخدم studentController لعرض الأنشطة لأنه محدث ليعمل مع الداتا بييز الجديدة
+ * بينما نترك الاشتراك/الإلغاء للـ activityController (تأكد من تحديثه لاحقاً)
  */
-router.get('/student/activities', authenticateToken, activityController.getActivities); // ✅ Updated
+router.get('/student/activities', authenticateToken, studentController.getActivities); // ✅ استخدام الكنترولر المحدث
 
-router.post('/student/activities/subscribe', authenticateToken, activityController.subscribeToActivity); // ✅ Added subscribe route
-
-router.get('/student/announcements', studentController.getAnnouncements);
-console.log("🛠️ Unsubscribe Route is Registering..."); // ✅ ضيف السطر ده هنا
+router.post('/student/activities/subscribe', authenticateToken, activityController.subscribeToActivity);
 router.post('/student/activities/unsubscribe', authenticateToken, activityController.unsubscribeFromActivity);
+
+// ANNOUNCEMENTS
+router.get('/student/announcements', authenticateToken, studentController.getAnnouncements);
 
 // ========================================
 // ATTENDANCE ROUTES
@@ -76,7 +76,9 @@ router.post('/student/complaints', authenticateToken, studentController.submitCo
 // MAINTENANCE ROUTES
 // ========================================
 router.get('/student/maintenance', authenticateToken, studentController.getMaintenanceRequests);
-router.post('/student/maintenance', authenticateToken, studentController.submitMaintenance);
+
+// ✅ التعديل الأهم هنا: إضافة upload.single('image') لاستقبال صورة العطل
+router.post('/student/maintenance', authenticateToken, upload.single('image'), studentController.submitMaintenance);
 
 // ========================================
 // PERMISSIONS ROUTES
